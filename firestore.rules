@@ -1,0 +1,128 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// This security rules file assumes the following data structures:
+//
+// Collection: users/{uid}/cities   (private, per-user subcollection)
+// Document ID: slug "<countryCode>--<region>--<name>", 1–200 chars
+// Fields:
+//   - name:        string    (required, 1–120 chars)  - City name, e.g. "Kyoto"
+//   - region:      string    (optional, 0–120 chars)  - State/province, may be ""
+//   - country:     string    (required, 1–80 chars)   - Country name
+//   - countryCode: string    (required, 2–3 lowercase letters) - ISO code, e.g. "jp"
+//   - lat:         number    (required, -90..90)      - Latitude
+//   - lng:         number    (required, -180..180)    - Longitude
+//   - addedAt:     timestamp (required, == server time on create) - When pinned
+//
+// Documents are created and deleted, never updated (the app re-creates a city
+// after an "undo" rather than editing it). No other collections are used.
+//
+// Queries performed by the app:
+//   - collection(users/{uid}/cities) orderBy('addedAt', 'desc')  [owner only]
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if the signed-in user owns the path segment {userId}
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Verify a 'uid' field (if ever added) can't point at someone else on create.
+    // (No uidNotModified() counterpart: updates are denied outright below.)
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == request.auth.uid;
+    }
+
+    // Validate required fields exist
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Validate that the document contains only the allowed fields
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Validate string length for a required field
+    function validStringLength(field, minLen, maxLen) {
+      return request.resource.data[field] is string &&
+        request.resource.data[field].size() >= minLen &&
+        request.resource.data[field].size() <= maxLen;
+    }
+
+    // Validate optional string (if present, must be string and within length)
+    function isValidOptionalString(field, minLen, maxLen) {
+      return !(field in request.resource.data) ||
+        (request.resource.data[field] is string &&
+         request.resource.data[field].size() >= minLen &&
+         request.resource.data[field].size() <= maxLen);
+    }
+
+    // Validate a number lies within [min, max]
+    function inRange(field, min, max) {
+      return request.resource.data[field] is number &&
+        request.resource.data[field] >= min &&
+        request.resource.data[field] <= max;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    // A visited-city document: strict schema, typed, size-limited, and
+    // stamped with the server time (prevents back/forward-dating).
+    function isValidCity(data) {
+      return hasOnlyAllowedFields(['name', 'region', 'country', 'countryCode', 'lat', 'lng', 'addedAt']) &&
+        hasRequiredFields(['name', 'country', 'countryCode', 'lat', 'lng', 'addedAt']) &&
+        validStringLength('name', 1, 120) &&
+        isValidOptionalString('region', 0, 120) &&
+        validStringLength('country', 1, 80) &&
+        data.countryCode is string && data.countryCode.matches('^[a-z]{2,3}$') &&
+        inRange('lat', -90, 90) &&
+        inRange('lng', -180, 180) &&
+        data.addedAt is timestamp && data.addedAt == request.time &&
+        uidUnchanged();
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId}/cities/{cityId} {
+      // Owner-only reads; covers the app's orderBy('addedAt') list query.
+      allow read: if isOwner(userId);
+
+      // Owner can pin a new city with a valid document.
+      allow create: if isOwner(userId) &&
+        cityId.size() >= 1 && cityId.size() <= 200 &&
+        isValidCity(request.resource.data);
+
+      // Cities are immutable once pinned; the app never edits them.
+      allow update: if false;
+
+      // Owner can remove a pinned city.
+      allow delete: if isOwner(userId);
+    }
+
+    // Default deny for every other path.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

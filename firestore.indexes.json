@@ -1,0 +1,11 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "cities",
+      "queryScope": "COLLECTION",
+      "density": "DENSE",
+      "fields": [{ "fieldPath": "addedAt", "order": "DESCENDING" }]
+    }
+  ],
+  "fieldOverrides": []
+}
