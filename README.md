@@ -4,6 +4,8 @@ A private travel map. Sign in with Google, pin every city you've visited, and wa
 
 **Live:** https://citytrail-10092006.web.app
 
+![CityTrail homepage](docs/homepage.png)
+
 ## Stack
 
 | Concern | Choice |
